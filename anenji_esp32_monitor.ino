@@ -300,7 +300,7 @@ void saveHist() {
   h.idx = histIdx; h.count = histCount;
   memcpy(h.pv, hist_pv, sizeof(hist_pv));
   memcpy(h.ld, hist_ld, sizeof(hist_ld));
-  memcpy(h.gr, h.gr, sizeof(hist_gr));
+  memcpy(h.gr, hist_gr, sizeof(hist_gr));
   File f = LittleFS.open("/hist.bin", "w");
   if (f) { f.write((uint8_t*)&h, sizeof(h)); f.close(); }
 
@@ -881,7 +881,7 @@ function fakeHist(){
 
 function flow(id,w){
  const e=$(id),a=Math.abs(w);
- e.setAttribute('class','ln '+(w>20?'f':w<-20?'r':''));
+ e.setAttribute('class','ln '+(w>5?'f':w<-5?'r':''));
  e.style.animationDuration=Math.max(0.25,1.6-a/2500*1.35)+'s';
 }
 
@@ -894,20 +894,20 @@ async function live(){
   else{b.textContent=mode;b.className='badge'+(d.mode==6?' off':d.mode==4?' warn':'');}
   const aut=d.ld>0.05?Math.max(0,Math.min(100,100*(1-d.gd/d.ld))):0;
   const ratio=d.load>10?Math.min(100,100*d.pv/d.load):(d.pv>0?100:0);
-  T('cpv',(d.pv/1000).toFixed(2));
-  T('csoc',d.ok?d.soc.toFixed(0):'--');
-  T('cld',d.load.toFixed(0));
-  T('cgr',d.grid.toFixed(0));
-  T('nsol',d.pvd.toFixed(1)+' kWh');
-  T('npv',d.pv.toFixed(0)+' W');
-  T('npv1',d.pv1v.toFixed(0)+' V');
-  T('ngr',d.grid.toFixed(0)+' W');
-  T('ngd',d.gd.toFixed(1));
-  T('nld',d.load.toFixed(0)+' W');
-  T('nhome',d.ld.toFixed(1)+' kWh');
-  T('nbat',d.soc.toFixed(0)+'%');
-  T('nbw',(d.bp>=0?'+':'')+d.bp.toFixed(0)+' W');
-  T('nbv',d.bv.toFixed(1)+' V · '+d.bc.toFixed(1)+' A');
+  T('cpv',(d.pv/1000).toFixed(3));
+  T('csoc',d.ok?d.soc.toFixed(1):'--');
+  T('cld',d.load.toFixed(1));
+  T('cgr',d.grid.toFixed(1));
+  T('nsol',d.pvd.toFixed(2)+' kWh');
+  T('npv',d.pv.toFixed(1)+' W');
+  T('npv1',d.pv1v.toFixed(1)+' V');
+  T('ngr',d.grid.toFixed(1)+' W');
+  T('ngd',d.gd.toFixed(2));
+  T('nld',d.load.toFixed(1)+' W');
+  T('nhome',d.ld.toFixed(2)+' kWh');
+  T('nbat',d.soc.toFixed(1)+'%');
+  T('nbw',(d.bp>=0?'+':'')+d.bp.toFixed(1)+' W');
+  T('nbv',d.bv.toFixed(2)+' V · '+d.bc.toFixed(2)+' A');
   T('nau',aut.toFixed(0)+'%');
   T('nra',ratio.toFixed(0)+'%');
   T('nac',d.ac.toFixed(0)+' V · '+d.freq.toFixed(1)+' Hz');
@@ -945,7 +945,13 @@ function lineChart(pv,ld,gr,step,range,mode){
  if(showPv) series.push(pv);
  if(showLd) series.push(ld);
  if(showGr) series.push(gr);
- let mx = series.length ? Math.max(100, ...series.map(s => s.reduce((a, b) => Math.max(a, b), 0))) : 100;
+ // Determine max Y value safely (avoid spread overflow with large arrays)
+  let mx = 100;
+  for (const s of series) {
+    for (let i = 0; i < s.length; i++) {
+      if (s[i] > mx) mx = s[i];
+    }
+  }
  const u = mx > 2000 ? 1000 : 500;
  mx = Math.ceil(mx/u)*u;
 
@@ -1346,12 +1352,12 @@ void handleData() {
   time_t n = time(nullptr);
   if (n > 1700000000) { struct tm t; localtime_r(&n, &t); strftime(tbuf, sizeof(tbuf), "%H:%M", &t); }
   String j; j.reserve(540);
-  j  = "{\"pv\":"   + String(pv_power, 0);
+  j  = "{\"pv\":"   + String(pv_power, 1);
   j += ",\"pv1v\":" + String(pv1_voltage, 1);
-  j += ",\"soc\":"  + String(bat_soc, 0);
-  j += ",\"load\":" + String(load_power, 0);
-  j += ",\"grid\":" + String(grid_power, 0);
-  j += ",\"bp\":"   + String(bat_power, 0);
+  j += ",\"soc\":"  + String(bat_soc, 1);
+  j += ",\"load\":" + String(load_power, 1);
+  j += ",\"grid\":" + String(grid_power, 1);
+  j += ",\"bp\":"   + String(bat_power, 1);
   j += ",\"bv\":"   + String(bat_voltage, 1);
   j += ",\"bc\":"   + String(bat_current * batSign, 1);
   j += ",\"ac\":"   + String(ac_voltage, 1);
