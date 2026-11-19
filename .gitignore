@@ -1,26 +1,5 @@
-# Build artifacts
-build/
-*.bin
-*.elf
-*.map
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Backup files
-*.bak
-*.backup
-*~
-
-# Preview generated
-preview.html
-
-# Node
-node_modules/
+# Keep only OTA files
+*
+!firmware.bin
+!version.txt
+!.gitignore
