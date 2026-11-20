@@ -22,7 +22,7 @@
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 
-const char* FW_VER = "2026.11.21";
+const char* FW_VER = "2026.11.22";
 
 // ====== Aktualizacja z GitHuba ======
 // Ustaw w Ustawieniach: użytkownik/repo (np. TwojaNazwa/anenji-monitor)
@@ -155,7 +155,13 @@ static void ghDone(bool ok, const String& msg) {
 }
 
 static void ghCheckStart() {
-  if (!ghEnable || ghUser.length() == 0 || ghRepo.length() == 0) return;
+  Serial.printf("[GH] check: en=%d user='%s' repo='%s' wifi=%d heap=%u\n",
+                ghEnable, ghUser.c_str(), ghRepo.c_str(), WiFi.status() == WL_CONNECTED, ESP.getFreeHeap());
+  if (!ghEnable || ghUser.length() == 0 || ghRepo.length() == 0) {
+    ghCheckErr = -1;
+    ghCheckMsg = "Wpisz uzytkownika i repo, zaznacz 'wlacz' i kliknij Zapisz";
+    return;
+  }
   if (ghUpdating) return;
   if (WiFi.status() != WL_CONNECTED) { ghCheckErr = -1; ghCheckMsg = "Brak polaczenia WiFi"; return; }
   ghCheckErr = 0; ghCheckMsg = "Sprawdzam wersje...";
@@ -180,7 +186,11 @@ static void ghCheckStart() {
 }
 
 static void ghUpdateStart() {
-  if (!ghEnable || ghUser.length() == 0 || ghRepo.length() == 0) return;
+  if (!ghEnable || ghUser.length() == 0 || ghRepo.length() == 0) {
+    ghCheckErr = -1;
+    ghCheckMsg = "Wpisz uzytkownika i repo, zaznacz 'wlacz' i kliknij Zapisz";
+    return;
+  }
   if (ghUpdating) return;
   if (WiFi.status() != WL_CONNECTED) { ghCheckErr = -1; ghCheckMsg = "Brak polaczenia WiFi"; return; }
   if (ghLatest.length() == 0) { ghCheckErr = -1; ghCheckMsg = "Najpierw sprawdz wersje"; return; }
@@ -199,24 +209,32 @@ static void ghUpdateStart() {
   http.setTimeout(60000);
   int code = http.GET();
   if (code != HTTP_CODE_OK) { Update.abort(); http.end(); ghDone(false, "HTTP " + String(code)); return; }
+  int len = http.getSize();
   WiFiClient* stream = http.getStreamPtr();
-  const size_t BUF = 4096;
-  uint8_t buf[BUF];
+  static uint8_t buf[2048];
   size_t total = 0;
-  while (http.connected() && stream->available()) {
-    int n = stream->readBytes(buf, BUF);
-    if (n <= 0) { delay(20); continue; }
+  uint32_t lastData = millis();
+  while (http.connected() && (len < 0 || (int)total < len)) {
+    size_t avail = stream->available();
+    if (!avail) {
+      if (millis() - lastData > 15000) break;
+      delay(10); continue;
+    }
+    int n = stream->readBytes(buf, min(avail, sizeof(buf)));
+    if (n <= 0) continue;
+    lastData = millis();
     if (total == 0 && buf[0] != 0xE9) {
       Update.abort(); http.end();
       ghDone(false, "To nie jest plik firmware (.ino.bin)");
       return;
     }
-    if (Update.write(buf, n) != n) { Update.abort(); http.end(); ghDone(false, "Blad zapisu"); return; }
+    if (Update.write(buf, n) != (size_t)n) { Update.abort(); http.end(); ghDone(false, "Blad zapisu"); return; }
     total += n; ghBytes = total;
     ghCheckMsg = "Pobieranie... " + String(total / 1024) + " KB";
     yield();
   }
   http.end();
+  if (len > 0 && (int)total != len) { Update.abort(); ghDone(false, "Pobrano " + String(total) + " z " + String(len) + " B"); return; }
   if (Update.end(true)) ghDone(true, "Wgrano z GitHuba. Restart...");
   else ghDone(false, String("Blad: ") + Update.errorString());
 }
