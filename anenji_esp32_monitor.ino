@@ -22,7 +22,7 @@
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 
-const char* FW_VER = "2026.11.24.2";
+const char* FW_VER = "2026.11.24.3";
 
 // ====== Aktualizacja z GitHuba ======
 // Domyślnie: repozytorium Dawid2711/anenji-monitor (można zmienić w Ustawieniach)
@@ -644,7 +644,7 @@ table.ht td:first-child,table.ht th:first-child{text-align:left}
 </div>
 
 <h3>Produkcja – ostatnie 7 dni</h3>
-<div class="box"><svg id="days" viewBox="0 0 560 160"></svg></div>
+<div class="box"><svg id="daysD" viewBox="0 0 560 160"></svg></div>
 <div class="foot" id="foot"></div>
 </div>
 
@@ -668,7 +668,7 @@ table.ht td:first-child,table.ht th:first-child{text-align:left}
  </div>
 
  <h3>Produkcja – ostatnie 7 dni</h3>
- <div class="box"><svg id="days" viewBox="0 0 560 160"></svg></div>
+ <div class="box"><svg id="daysHis" viewBox="0 0 560 160"></svg></div>
 
  <h3>Ostatnie 30 dni – produkcja PV [kWh]</h3>
  <div class="box"><svg id="h30" viewBox="0 0 560 170"></svg></div>
@@ -1005,8 +1005,12 @@ async function live(){
   // Wykres 24h na pulpicie
   if(DEMO){
    drawDashboardHist(fakeHist().pv, fakeHist().ld, fakeHist().gr||[]);
+   bars(fakeHist().days, 'daysD');
   }else{
-   fetch('/history?range=24h').then(r=>r.json()).then(h=>drawDashboardHist(h.pv,h.ld,h.gr||[])).catch(()=>{});
+   fetch('/history?range=24h').then(r=>r.json()).then(h=>{
+    drawDashboardHist(h.pv,h.ld,h.gr||[]);
+    bars(h.days, 'daysD');
+   }).catch(()=>{});
   }
  }catch(e){const b=$('badge');b.textContent='BRAK POŁĄCZENIA';b.className='badge off';}
 }
@@ -1125,10 +1129,10 @@ function lineChart(pv,ld,gr,step,range,mode){
  area.ontouchend = ()=>{ tip.className = ''; cross.style.opacity = '0'; };
 }
 
-function bars(days){
+function bars(days, id){
  const a=days.slice(0,6).reverse();a.push(window._today||0);
  const W=560,H=160,Tp=14,B=22,bw=44,gap=(W-7*bw)/8;
- const mx=Math.max(1,...a)*1.15,s=$('days');let g='';
+ const mx=Math.max(1,...a)*1.15,s=$(id);let g='';
  a.forEach((v,i)=>{
   const x=gap+i*(bw+gap),h=(H-Tp-B)*v/mx,y=H-B-h;
   const d=new Date(Date.now()-(6-i)*86400000);
@@ -1137,7 +1141,6 @@ function bars(days){
   g+=`<text x="${x+bw/2}" y="${H-7}" text-anchor="middle" font-size="10" fill="#8aa0b8">${i==6?'Dziś':DN[d.getDay()]}</text>`;
  });
  s.innerHTML=g;
- s.onclick = () => openFullscreen('days');
 }
 
 async function histLoad(){
@@ -1147,7 +1150,7 @@ async function histLoad(){
  try{
   const h=DEMO?fakeHist():await(await fetch('/history?range='+range)).json();
   lineChart(h.pv,h.ld,h.gr||[],h.step,h.range,mode);
-  bars(h.days);
+  bars(h.days, 'daysHis');
  }catch(e){}
 }
 
@@ -1166,7 +1169,6 @@ function bars30(a){
   if(n<=16)g+=`<text x="${px+bw/2}" y="${y-3}" text-anchor="middle" font-size="9" fill="#e8eef6">${x.pv.toFixed(1)}</text>`;
  });
  s.innerHTML=g;
- s.onclick = () => openFullscreen('h30');
 }
 async function daysLoad(){
  $('hmsg').textContent='Wczytuję…';
