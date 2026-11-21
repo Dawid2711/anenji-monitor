@@ -22,13 +22,13 @@
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 
-const char* FW_VER = "2026.11.22";
+const char* FW_VER = "2026.11.23";
 
 // ====== Aktualizacja z GitHuba ======
-// Ustaw w Ustawieniach: użytkownik/repo (np. TwojaNazwa/anenji-monitor)
+// Domyślnie: repozytorium Dawid2711/anenji-monitor (można zmienić w Ustawieniach)
 // W repo muszą być pliki: version.txt (jedna linia z wersją) i firmware.bin
-String ghUser, ghRepo;
-bool  ghEnable = false;
+String ghUser = "Dawid2711", ghRepo = "anenji-monitor";
+bool  ghEnable = true;
 
 String ghVerUrl() { return "https://raw.githubusercontent.com/" + ghUser + "/" + ghRepo + "/main/version.txt"; }
 String ghBinUrl() { return "https://raw.githubusercontent.com/" + ghUser + "/" + ghRepo + "/main/firmware.bin"; }
@@ -101,9 +101,9 @@ void loadCfg() {
   batSign  = prefs.getChar("bs", 1);
   addrOff  = prefs.getShort("off", 0);
   bcOffset = prefs.getFloat("bco", 0.0f);
-  ghUser   = prefs.getString("ghu", "");
-  ghRepo   = prefs.getString("ghr", "");
-  ghEnable = prefs.getBool("ghe", false);
+  ghUser   = prefs.getString("ghu", "Dawid2711");
+  ghRepo   = prefs.getString("ghr", "anenji-monitor");
+  ghEnable = prefs.getBool("ghe", true);
   for (int i = 0; i < NUM_SIGS; i++) {
     char k[8];
     snprintf(k, sizeof(k), "a%d", i); sigs[i].addr  = prefs.getInt(k, sigs[i].defAddr);
@@ -154,12 +154,21 @@ static void ghDone(bool ok, const String& msg) {
   ghCheckMsg = msg;
 }
 
+static bool ghNameOk(const String& s) {
+  if (s.length() < 1 || s.length() > 64) return false;
+  for (size_t i = 0; i < s.length(); i++) {
+    char c = s[i];
+    if (!(isalnum((unsigned char)c) || c == '-' || c == '_' || c == '.')) return false;
+  }
+  return true;
+}
+
 static void ghCheckStart() {
   Serial.printf("[GH] check: en=%d user='%s' repo='%s' wifi=%d heap=%u\n",
                 ghEnable, ghUser.c_str(), ghRepo.c_str(), WiFi.status() == WL_CONNECTED, ESP.getFreeHeap());
-  if (!ghEnable || ghUser.length() == 0 || ghRepo.length() == 0) {
+  if (!ghEnable || ghUser.length() == 0 || ghRepo.length() == 0 || !ghNameOk(ghUser) || !ghNameOk(ghRepo)) {
     ghCheckErr = -1;
-    ghCheckMsg = "Wpisz uzytkownika i repo, zaznacz 'wlacz' i kliknij Zapisz";
+    ghCheckMsg = "Wpisz uzytkownika i repo oraz zaznacz 'wlacz'";
     return;
   }
   if (ghUpdating) return;
@@ -186,30 +195,40 @@ static void ghCheckStart() {
 }
 
 static void ghUpdateStart() {
-  if (!ghEnable || ghUser.length() == 0 || ghRepo.length() == 0) {
+  if (!ghEnable || ghUser.length() == 0 || ghRepo.length() == 0 || !ghNameOk(ghUser) || !ghNameOk(ghRepo)) {
     ghCheckErr = -1;
-    ghCheckMsg = "Wpisz uzytkownika i repo, zaznacz 'wlacz' i kliknij Zapisz";
+    ghCheckMsg = "Wpisz uzytkownika i repo oraz zaznacz 'wlacz'";
     return;
   }
   if (ghUpdating) return;
   if (WiFi.status() != WL_CONNECTED) { ghCheckErr = -1; ghCheckMsg = "Brak polaczenia WiFi"; return; }
   if (ghLatest.length() == 0) { ghCheckErr = -1; ghCheckMsg = "Najpierw sprawdz wersje"; return; }
+
   ghUpdating = true; ghBytes = 0; ghCheckErr = 0;
   ghCheckMsg = "Pobieranie firmware.bin...";
   saveState(); saveHist();
-  if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
-    ghDone(false, "Brak miejsca / zly schemat partycji");
-    return;
-  }
+
   WiFiClientSecure client;
   client.setInsecure();
   client.setTimeout(60000);
   HTTPClient http;
-  if (!http.begin(client, ghBinUrl())) { Update.abort(); ghDone(false, "Blad polaczenia"); return; }
   http.setTimeout(60000);
+  if (!http.begin(client, ghBinUrl())) { ghDone(false, "Blad polaczenia"); return; }
   int code = http.GET();
-  if (code != HTTP_CODE_OK) { Update.abort(); http.end(); ghDone(false, "HTTP " + String(code)); return; }
-  int len = http.getSize();
+  if (code != HTTP_CODE_OK) { http.end(); ghDone(false, "HTTP " + String(code)); return; }
+
+  int len = http.getSize();   // -1 jesli serwer nie podal rozmiaru
+  if (len > 0 && len < 100000) {
+    http.end();
+    ghDone(false, "Plik za maly (" + String(len) + " B) - to nie jest firmware");
+    return;
+  }
+  if (!Update.begin(len > 0 ? (size_t)len : (size_t)UPDATE_SIZE_UNKNOWN)) {
+    http.end();
+    ghDone(false, String("Update.begin: ") + Update.errorString());
+    return;
+  }
+
   WiFiClient* stream = http.getStreamPtr();
   static uint8_t buf[2048];
   size_t total = 0;
@@ -217,8 +236,9 @@ static void ghUpdateStart() {
   while (http.connected() && (len < 0 || (int)total < len)) {
     size_t avail = stream->available();
     if (!avail) {
-      if (millis() - lastData > 15000) break;
-      delay(10); continue;
+      if (millis() - lastData > 20000) break;   // 20 s bez danych
+      delay(10);
+      continue;
     }
     int n = stream->readBytes(buf, min(avail, sizeof(buf)));
     if (n <= 0) continue;
@@ -228,15 +248,29 @@ static void ghUpdateStart() {
       ghDone(false, "To nie jest plik firmware (.ino.bin)");
       return;
     }
-    if (Update.write(buf, n) != (size_t)n) { Update.abort(); http.end(); ghDone(false, "Blad zapisu"); return; }
+    if (Update.write(buf, n) != (size_t)n) {
+      Update.abort(); http.end();
+      ghDone(false, "Blad zapisu");
+      return;
+    }
     total += n; ghBytes = total;
     ghCheckMsg = "Pobieranie... " + String(total / 1024) + " KB";
     yield();
   }
   http.end();
-  if (len > 0 && (int)total != len) { Update.abort(); ghDone(false, "Pobrano " + String(total) + " z " + String(len) + " B"); return; }
-  if (Update.end(true)) ghDone(true, "Wgrano z GitHuba. Restart...");
-  else ghDone(false, String("Blad: ") + Update.errorString());
+
+  if (total == 0) { Update.abort(); ghDone(false, "Nie pobrano zadnych danych"); return; }
+  if (len > 0 && (int)total != len) {
+    Update.abort();
+    ghDone(false, "Pobrano " + String(total) + " z " + String(len) + " B");
+    return;
+  }
+  if (Update.end(true)) {
+    ghDone(true, "Wgrano z GitHuba. Restart...");
+    restartAt = millis() + 1500;
+  } else {
+    ghDone(false, String("Blad: ") + Update.errorString());
+  }
 }
 
 // ====== Statystyki i historia ======
@@ -252,14 +286,20 @@ double accPv = 0, accLd = 0, accGr = 0; int accN = 0;
 bool histPending = false;
 uint32_t histSavedEpoch = 0;
 
-// ====== Hourly history (720h = 30d) ======
+// 1 godzina x 720 = 30 dni
 #define HIST_H_N 720
 uint16_t hist_h_pv[HIST_H_N], hist_h_ld[HIST_H_N], hist_h_gr[HIST_H_N];
 int hist_h_idx = 0, hist_h_cnt = 0;
 double acc_h_pv = 0, acc_h_ld = 0, acc_h_gr = 0; int acc_h_n = 0;
 uint32_t hist_h_saved = 0;
 
-unsigned long lastRead = 0, lastHist = 0, lastSave = 0, lastHistSave = 0;
+// 30 sekund x 120 = 1 godzina (tylko RAM)
+#define HIST_S_N 120
+uint16_t hist_s_pv[HIST_S_N], hist_s_ld[HIST_S_N], hist_s_gr[HIST_S_N];
+int hist_s_idx = 0, hist_s_cnt = 0;
+double accS_pv = 0, accS_ld = 0, accS_gr = 0; int accS_n = 0;
+
+unsigned long lastRead = 0, lastHist = 0, lastShort = 0, lastSave = 0, lastHistSave = 0;
 
 const char* DAYS_FILE = "/days.bin";
 const int   DAYS_MAX  = 1000;
@@ -310,6 +350,14 @@ void pushHistHourly(uint16_t pv, uint16_t ld, uint16_t gr) {
   if (hist_h_cnt < HIST_H_N) hist_h_cnt++;
 }
 
+void pushHistShort(uint16_t pv, uint16_t ld, uint16_t gr) {
+  hist_s_pv[hist_s_idx] = pv;
+  hist_s_ld[hist_s_idx] = ld;
+  hist_s_gr[hist_s_idx] = gr;
+  hist_s_idx = (hist_s_idx + 1) % HIST_S_N;
+  if (hist_s_cnt < HIST_S_N) hist_s_cnt++;
+}
+
 void saveHist() {
   static HistFile h;
   time_t n = time(nullptr);
@@ -322,43 +370,55 @@ void saveHist() {
   File f = LittleFS.open("/hist.bin", "w");
   if (f) { f.write((uint8_t*)&h, sizeof(h)); f.close(); }
 
-  static HistFile h2;
-  h2.magic = 0x48495348; // 'HISH'
-  h2.epoch = h.epoch;
-  h2.idx = hist_h_idx; h2.count = hist_h_cnt;
-  memcpy(h2.pv, hist_h_pv, sizeof(hist_h_pv));
-  memcpy(h2.ld, hist_h_ld, sizeof(hist_h_ld));
-  memcpy(h2.gr, hist_h_gr, sizeof(hist_h_gr));
-  f = LittleFS.open("/histh.bin", "w");
-  if (f) { f.write((uint8_t*)&h2, sizeof(h2)); f.close(); }
+  static struct HistFileH {
+    uint32_t magic; uint32_t epoch;
+    uint16_t idx; uint16_t count;
+    uint16_t pv[HIST_H_N]; uint16_t ld[HIST_H_N]; uint16_t gr[HIST_H_N];
+  } hh;
+  hh.magic = 0x48495349;
+  hh.epoch = h.epoch;
+  hh.idx = hist_h_idx; hh.count = hist_h_cnt;
+  memcpy(hh.pv, hist_h_pv, sizeof(hh.pv));
+  memcpy(hh.ld, hist_h_ld, sizeof(hh.ld));
+  memcpy(hh.gr, hist_h_gr, sizeof(hh.gr));
+  f = LittleFS.open("/histh2.bin", "w");
+  if (f) { f.write((uint8_t*)&hh, sizeof(hh)); f.close(); }
 }
 
 void loadHist() {
+  LittleFS.remove("/histh.bin");   // stary, uszkodzony format
   static HistFile h;
   File f = LittleFS.open("/hist.bin", "r");
-  if (!f) return;
-  if (f.read((uint8_t*)&h, sizeof(h)) == sizeof(h) && h.magic == 0x48495354) {
-    memcpy(hist_pv, h.pv, sizeof(hist_pv));
-    memcpy(hist_ld, h.ld, sizeof(hist_ld));
-    memcpy(hist_gr, h.gr, sizeof(hist_gr));
-    histIdx = h.idx % HIST_N;
-    histCount = min((int)h.count, HIST_N);
-    histSavedEpoch = h.epoch;
-    histPending = (h.epoch > 1700000000);
+  if (f) {
+    if (f.read((uint8_t*)&h, sizeof(h)) == sizeof(h) && h.magic == 0x48495354) {
+      memcpy(hist_pv, h.pv, sizeof(hist_pv));
+      memcpy(hist_ld, h.ld, sizeof(hist_ld));
+      memcpy(hist_gr, h.gr, sizeof(hist_gr));
+      histIdx = h.idx % HIST_N;
+      histCount = min((int)h.count, HIST_N);
+      histSavedEpoch = h.epoch;
+      histPending = (h.epoch > 1700000000);
+    }
+    f.close();
   }
-  f.close();
 
-  f = LittleFS.open("/histh.bin", "r");
-  if (!f) return;
-  if (f.read((uint8_t*)&h, sizeof(h)) == sizeof(h) && h.magic == 0x48495348) {
-    memcpy(hist_h_pv, h.pv, sizeof(hist_h_pv));
-    memcpy(hist_h_ld, h.ld, sizeof(hist_h_ld));
-    memcpy(hist_h_gr, h.gr, sizeof(hist_h_gr));
-    hist_h_idx = h.idx % HIST_H_N;
-    hist_h_cnt = min((int)h.count, HIST_H_N);
-    hist_h_saved = h.epoch;
+  static struct HistFileH {
+    uint32_t magic; uint32_t epoch;
+    uint16_t idx; uint16_t count;
+    uint16_t pv[HIST_H_N]; uint16_t ld[HIST_H_N]; uint16_t gr[HIST_H_N];
+  } hh;
+  f = LittleFS.open("/histh2.bin", "r");
+  if (f) {
+    if (f.read((uint8_t*)&hh, sizeof(hh)) == sizeof(hh) && hh.magic == 0x48495349) {
+      memcpy(hist_h_pv, hh.pv, sizeof(hist_h_pv));
+      memcpy(hist_h_ld, hh.ld, sizeof(hist_h_ld));
+      memcpy(hist_h_gr, hh.gr, sizeof(hist_h_gr));
+      hist_h_idx = hh.idx % HIST_H_N;
+      hist_h_cnt = min((int)hh.count, HIST_H_N);
+      hist_h_saved = hh.epoch;
+    }
+    f.close();
   }
-  f.close();
 }
 
 void fixHistGap(time_t now) {
@@ -662,16 +722,15 @@ table.ht td:first-child,table.ht th:first-child{text-align:left}
  <div class="sg">
   <div class="tst" id="ghst">--</div>
   <div class="sr g" style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-   <label>Użytkownik / repo<input type="text" id="ghu" autocapitalize="none" autocomplete="off" placeholder="TwojaNazwa"></label>
-   <label>Repo<input type="text" id="ghr" autocomplete="off" placeholder="anenji-monitor"></label>
+   <label>Użytkownik GitHub<input type="text" id="ghu" autocapitalize="none" autocomplete="off" placeholder="Dawid2711"></label>
+   <label>Repozytorium<input type="text" id="ghr" autocapitalize="none" autocomplete="off" placeholder="anenji-monitor"></label>
   </div>
-  <div class="sr g" style="display:grid;grid-template-columns:1fr auto;gap:8px;margin-top:8px">
-   <label class="cb"><input type="checkbox" id="ghe" checked> włącz automatycznie</label>
-   <div></div>
+  <div class="sr g" style="display:grid;grid-template-columns:1fr;gap:8px;margin-top:8px">
+   <label class="cb"><input type="checkbox" id="ghe" checked> sprawdzaj codziennie o 12:00</label>
   </div>
   <div class="tst" id="ghmsg"></div>
   <div class="btns"><button class="btn df" onclick="ghCheck()">Sprawdź aktualizację</button><button class="btn wr" onclick="ghUpdate()">Wgraj z GitHuba</button></div>
-  <div class="note">W repo <b>main</b> muszą być pliki: <code>version.txt</code> (jedna linia z wersją, np. 2026.11.18) i <code>firmware.bin</code> (Szkic → Eksportuj skompilowany plik binarny). Sprawdzanie=o 12:00.</div>
+  <div class="note">W repo <b>main</b> muszą być pliki: <code>version.txt</code> (jedna linia z wersją, np. 2026.11.24) i <code>firmware.bin</code> (Szkic → Eksportuj skompilowany plik binarny, plik <b>.ino.bin</b>). Najpierw wrzuć <code>firmware.bin</code>, potem <code>version.txt</code>. „Wgraj z GitHuba” wymaga hasła OTA (pole poniżej, domyślnie anenji).</div>
  </div>
 
  <h3>Aktualizacja firmware (OTA)</h3>
@@ -1246,6 +1305,13 @@ async function otaPw(){
 }
 
 /* ===== GITHUB ===== */
+function ghFields(){
+  const p=new URLSearchParams();
+  p.set('ghu',$('ghu').value.trim());
+  p.set('ghr',$('ghr').value.trim());
+  p.set('ghe',$('ghe').checked?1:0);
+  return p;
+}
 async function ghStatus(){
  try{
   const r=await(await fetch('/ghstatus')).json();
@@ -1262,14 +1328,45 @@ async function ghStatus(){
 }
 async function ghCheck(){
  $('ghmsg').textContent='Sprawdzam…';
- try{await fetch('/ghcheck');await ghStatus();}
- catch(e){$('ghmsg').textContent='Błąd';}
+ try{
+  const sv=await fetch('/ghsave',{method:'POST',body:ghFields()});
+  if(!sv.ok){$('ghmsg').innerHTML='<span style="color:#f87171">Niepoprawna nazwa użytkownika lub repo (tylko litery, cyfry, - _ .).</span>';return;}
+  await fetch('/ghcheck');
+  for(let i=0;i<20;i++){
+   await new Promise(r=>setTimeout(r,1000));
+   const r=await(await fetch('/ghstatus')).json();
+   if(r.msg!=='Sprawdzam wersje...'){await ghStatus();return;}
+  }
+  $('ghmsg').textContent='Brak odpowiedzi (timeout).';
+ }catch(e){$('ghmsg').textContent='Błąd połączenia';}
 }
 async function ghUpdate(){
  if(!confirm('Wgrać najnowszą wersję z GitHuba? Urządzenie zrestartuje się.'))return;
- $('ghmsg').textContent='Wgrywanie…';
- try{await fetch('/ghupdate');await ghStatus();}
- catch(e){$('ghmsg').textContent='Błąd';}
+ let v0='';
+ try{v0=(await(await fetch('/data')).json()).ver;}catch(e){}
+ const p=new URLSearchParams();p.set('pw',$('otapw').value||'anenji');
+ $('ghmsg').textContent='Wgrywanie… to może potrwać 1–2 min, nie zamykaj strony.';
+ try{
+  const r=await fetch('/ghupdate',{method:'POST',body:p});
+  if(r.status==403){$('ghmsg').innerHTML='<span style="color:#f87171">Złe hasło OTA (pole w sekcji poniżej).</span>';return;}
+ }catch(e){}
+ let n=0;
+ const iv=setInterval(async()=>{
+  n++;
+  try{
+   const d=await(await fetch('/data')).json();
+   if(v0&&d.ver!==v0){
+    clearInterval(iv);
+    $('ghmsg').innerHTML='<span style="color:#4ade80">Gotowe. Wersja '+d.ver+'.</span>';
+    setTimeout(()=>location.reload(),1500);
+    return;
+   }
+   const s=await(await fetch('/ghstatus')).json();
+   if(!s.updating&&s.err!==0){clearInterval(iv);$('ghmsg').innerHTML='<span style="color:#f87171">'+(s.msg||'Błąd')+'</span>';return;}
+   if(s.updating)$('ghmsg').textContent='Pobrano '+(s.bytes/1024).toFixed(0)+' KB…';
+  }catch(e){}
+  if(n>70){clearInterval(iv);$('ghmsg').textContent='Brak odpowiedzi. Odśwież stronę i sprawdź wersję.';}
+ },2000);
 }
 
 /* ===== SKANER ===== */
@@ -1399,10 +1496,10 @@ void handleHistory() {
   String range = server.arg("range");
   uint32_t stepSec = 300;
   int maxPoints = HIST_N;
-  bool useHourly = false;
+  bool useHourly = false, useShort = false;
 
-  if (range == "15m") { stepSec = 300; maxPoints = 30; }
-  else if (range == "1h") { stepSec = 300; maxPoints = 12; }
+  if (range == "15m") { stepSec = 30; maxPoints = 30; useShort = true; }
+  else if (range == "1h") { stepSec = 30; maxPoints = 120; useShort = true; }
   else if (range == "6h") { stepSec = 300; maxPoints = 72; }
   else if (range == "24h") { stepSec = 300; maxPoints = 288; }
   else if (range == "7d") { stepSec = 3600; maxPoints = 168; useHourly = true; }
@@ -1411,12 +1508,12 @@ void handleHistory() {
   else if (range == "1y") { stepSec = 3600 * 24; maxPoints = 365; useHourly = true; }
   else { range = "24h"; }
 
-  uint16_t *pvArr = useHourly ? hist_h_pv : hist_pv;
-  uint16_t *ldArr = useHourly ? hist_h_ld : hist_ld;
-  uint16_t *grArr = useHourly ? hist_h_gr : hist_gr;
-  int cnt = useHourly ? hist_h_cnt : histCount;
-  int idxBase = useHourly ? hist_h_idx : histIdx;
-  int maxCnt = useHourly ? HIST_H_N : HIST_N;
+  uint16_t *pvArr = useShort ? hist_s_pv : (useHourly ? hist_h_pv : hist_pv);
+  uint16_t *ldArr = useShort ? hist_s_ld : (useHourly ? hist_h_ld : hist_ld);
+  uint16_t *grArr = useShort ? hist_s_gr : (useHourly ? hist_h_gr : hist_gr);
+  int cnt = useShort ? hist_s_cnt : (useHourly ? hist_h_cnt : histCount);
+  int idxBase = useShort ? hist_s_idx : (useHourly ? hist_h_idx : histIdx);
+  int maxCnt = useShort ? HIST_S_N : (useHourly ? HIST_H_N : HIST_N);
   int n = min(cnt, maxPoints);
 
   String j; j.reserve(8000);
@@ -1759,7 +1856,21 @@ void handleGhCheck() {
   server.send(200, "application/json", "{\"ok\":true}");
 }
 
+void handleGhSave() {
+  String u = server.arg("ghu"), r = server.arg("ghr");
+  u.trim(); r.trim();
+  if (!ghNameOk(u) || !ghNameOk(r)) { server.send(400, "application/json", "{\"ok\":false}"); return; }
+  ghUser = u; ghRepo = r;
+  ghEnable = server.arg("ghe").toInt() ? true : false;
+  prefs.putString("ghu", ghUser);
+  prefs.putString("ghr", ghRepo);
+  prefs.putBool("ghe", ghEnable);
+  ghLatest = ""; ghNewVer = false;
+  server.send(200, "application/json", "{\"ok\":true}");
+}
+
 void handleGhUpdate() {
+  if (server.arg("pw") != otaPass()) { server.send(403, "application/json", "{\"ok\":false}"); return; }
   ghUpdateReq = true;
   server.send(200, "application/json", "{\"ok\":true}");
 }
@@ -1882,8 +1993,9 @@ void setup() {
   server.on("/scanid", HTTP_GET, handleScanId);
   server.on("/scanregs", HTTP_GET, handleScanRegs);
   server.on("/ghstatus", HTTP_GET, handleGhStatus);
+  server.on("/ghsave", HTTP_POST, handleGhSave);
   server.on("/ghcheck", HTTP_GET, handleGhCheck);
-  server.on("/ghupdate", HTTP_GET, handleGhUpdate);
+  server.on("/ghupdate", HTTP_POST, handleGhUpdate);
   server.begin();
   Serial.println("Serwer HTTP uruchomiony.");
 }
@@ -1902,23 +2014,23 @@ void loop() {
   if (ghCheckReq) { ghCheckReq = false; ghCheckStart(); }
   if (ghUpdateReq) { ghUpdateReq = false; ghUpdateStart(); }
 
-  if (ghEnable && !ghUpdating && ghCheckErr != 0 && ghCheckAt == 0) {
-    ghCheckAt = 1; ghCheckStart();
-  }
-
-  if (ghEnable && !ghUpdating && ghCheckAt > 0) {
-    time_t n = time(nullptr);
-    if (n > 1700000000) {
-      struct tm t; localtime_r(&n, &t);
-      if (t.tm_hour == 12 && t.tm_min < 2 && t.tm_sec < 2 && ghCheckAt < 2) {
-        ghCheckAt = 2; ghCheckStart();
+  // Sprawdzanie wersji na GitHubie: raz po starcie (~90 s) i codziennie od 12:00
+  if (ghEnable && !ghUpdating && WiFi.status() == WL_CONNECTED) {
+    static bool bootChecked = false;
+    static int lastKey = -1;
+    time_t tn = time(nullptr);
+    if (tn > 1700000000) {
+      struct tm tmx; localtime_r(&tn, &tmx);
+      int key = tmx.tm_year * 400 + tmx.tm_yday;
+      if (!bootChecked && millis() > 90000UL) {
+        bootChecked = true;
+        if (tmx.tm_hour >= 12) lastKey = key;
+        ghCheckStart();
+      } else if (tmx.tm_hour == 12 && key != lastKey) {
+        lastKey = key;
+        ghCheckStart();
       }
     }
-  }
-
-  if (ghUpdating) {
-    if (ghBytes == 0) delay(20);
-    return;
   }
 
   if (scanRun) { scanStep(); return; }
@@ -1937,12 +2049,23 @@ void loop() {
       load_wh += load_power * h;
       grid_wh += grid_power * h;
       accPv += pv_power; accLd += load_power; accGr += grid_power; accN++;
+      accS_pv += pv_power; accS_ld += load_power; accS_gr += grid_power; accS_n++;
     }
     Serial.printf("Mode=%d PV=%.0fW SOC=%.0f%% Load=%.0fW Bat=%.1fV %.1fA Grid=%.0fW AC=%.1fV Modbus=%s\n",
                   (int)op_mode, pv_power, bat_soc, load_power, bat_voltage, bat_current,
                   grid_power, ac_voltage, modbusOk ? "OK" : "BRAK");
   }
 
+  // próbka co 30 s (wykresy 15 min i 1 h)
+  if (now - lastShort >= 30000UL) {
+    lastShort = now;
+    pushHistShort(accS_n ? (uint16_t)(accS_pv / accS_n) : 0,
+                  accS_n ? (uint16_t)(accS_ld / accS_n) : 0,
+                  accS_n ? (uint16_t)(accS_gr / accS_n) : 0);
+    accS_pv = accS_ld = accS_gr = 0; accS_n = 0;
+  }
+
+  // próbka co 5 min (wykresy 6 h i 24 h)
   if (now - lastHist >= 300000UL) {
     lastHist = now;
     pushHist(accN ? (uint16_t)(accPv / accN) : 0,
@@ -1952,6 +2075,7 @@ void loop() {
     accPv = accLd = accGr = 0; accN = 0;
   }
 
+  // próbka co godzinę (wykresy 7 i 30 dni)
   static uint32_t lastHour = 0;
   if (now - lastHour >= 3600000UL) {
     lastHour = now;
