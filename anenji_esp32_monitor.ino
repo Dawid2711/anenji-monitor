@@ -22,7 +22,7 @@
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 
-const char* FW_VER = "2026.11.24.3";
+const char* FW_VER = "2026.11.24.4";
 
 // ====== Aktualizacja z GitHuba ======
 // Domyślnie: repozytorium Dawid2711/anenji-monitor (można zmienić w Ustawieniach)
