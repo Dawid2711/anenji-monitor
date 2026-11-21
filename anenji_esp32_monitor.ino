@@ -1025,16 +1025,21 @@ function drawDashboardHist(pv,ld,gr){
  const u=mx>2000?1000:500; mx=Math.ceil(mx/u)*u;
  const X=i=>L+i*(W-L-R)/(n-1), Y=v=>Tp+(H-Tp-B)*(1-v/mx);
  let g='';
+ // Dashed grid lines with value labels
  for(let k=0;k<=4;k++){const v=mx*k/4,y=Y(v);
-  g+=`<line x1="${L}" x2="${W-R}" y1="${y}" y2="${y}" stroke="#223449"/><text x="${L-4}" y="${y+3}" text-anchor="end" font-size="9" fill="#8aa0b8">${(v/1000).toFixed(1)}</text>`;}
+  g+=`<line x1="${L}" x2="${W-R}" y1="${y}" y2="${y}" stroke="#223449" stroke-dasharray="4 4"/><text x="${L-4}" y="${y+3}" text-anchor="end" font-size="9" fill="#8aa0b8">${(v/1000).toFixed(1)}</text>`;}
  const pts=a=>a.map((v,i)=>X(i).toFixed(1)+','+Y(v).toFixed(1)).join(' ');
  const now=Date.now();
  for(let k=0;k<=4;k++){const i=Math.round(k*(n-1)/4),t=new Date(now-(n-1-i)*300000);
   g+=`<text x="${X(i)}" y="${H-5}" text-anchor="middle" font-size="9" fill="#8aa0b8">${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')}</text>`;}
+ // PV area fill
  g+=`<polygon points="${X(0)},${Y(0)} ${pts(pv)} ${X(n-1)},${Y(0)}" fill="#fbbf2430"/>`;
- g+=`<polyline points="${pts(pv)}" fill="none" stroke="#fbbf24" stroke-width="2"/>`;
- g+=`<polyline points="${pts(ld)}" fill="none" stroke="#38bdf8" stroke-width="1.5"/>`;
- g+=`<polyline points="${pts(gr)}" fill="none" stroke="#ec4899" stroke-width="1.5"/>`;
+ // PV line (dashed)
+ g+=`<polyline points="${pts(pv)}" fill="none" stroke="#fbbf24" stroke-width="2" stroke-dasharray="5 5"/>`;
+ // Load line (dashed)
+ g+=`<polyline points="${pts(ld)}" fill="none" stroke="#38bdf8" stroke-width="1.5" stroke-dasharray="5 3"/>`;
+ // Grid line (dashed)
+ g+=`<polyline points="${pts(gr)}" fill="none" stroke="#ec4899" stroke-width="1.5" stroke-dasharray="5 3"/>`;
  s.innerHTML=g;
 }
 
