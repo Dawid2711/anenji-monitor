@@ -22,7 +22,7 @@
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
 
-const char* FW_VER = "2026.11.23";
+const char* FW_VER = "2026.11.24";
 
 // ====== Aktualizacja z GitHuba ======
 // Domyślnie: repozytorium Dawid2711/anenji-monitor (można zmienić w Ustawieniach)
@@ -274,7 +274,7 @@ static void ghUpdateStart() {
 }
 
 // ====== Statystyki i historia ======
-double pv_wh = 0, load_wh = 0, grid_wh = 0;
+double pv_wh = 0, load_wh = 0, grid_wh = 0, pv_bat_wh = 0;
 float daysKwh[7] = {0};
 int curDay = 0;
 uint32_t curDate = 0;
@@ -305,7 +305,7 @@ const char* DAYS_FILE = "/days.bin";
 const int   DAYS_MAX  = 1000;
 struct DayRec { uint32_t date; float pv, load, grid; };
 
-struct Saved { uint32_t magic; int32_t day; uint32_t date; float pv, load, grid; float days[7]; };
+struct Saved { uint32_t magic; int32_t day; uint32_t date; float pv, load, grid, pv_bat; float days[7]; };
 
 struct HistFile {
   uint32_t magic; uint32_t epoch;
@@ -317,7 +317,7 @@ void saveState() {
   File f = LittleFS.open("/state.bin", "w");
   if (!f) return;
   Saved s; s.magic = 0xA11E1106; s.day = curDay; s.date = curDate;
-  s.pv = pv_wh; s.load = load_wh; s.grid = grid_wh;
+  s.pv = pv_wh; s.load = load_wh; s.grid = grid_wh; s.pv_bat = pv_bat_wh;
   for (int i = 0; i < 7; i++) s.days[i] = daysKwh[i];
   f.write((uint8_t*)&s, sizeof(s));
   f.close();
@@ -328,7 +328,7 @@ void loadState() {
   if (!f) return;
   Saved s;
   if (f.read((uint8_t*)&s, sizeof(s)) == sizeof(s) && s.magic == 0xA11E1106) {
-    curDay = s.day; curDate = s.date; pv_wh = s.pv; load_wh = s.load; grid_wh = s.grid;
+    curDay = s.day; curDate = s.date; pv_wh = s.pv; load_wh = s.load; grid_wh = s.grid; pv_bat_wh = s.pv_bat;
     for (int i = 0; i < 7; i++) daysKwh[i] = s.days[i];
   }
   f.close();
@@ -618,6 +618,7 @@ table.ht td:first-child,table.ht th:first-child{text-align:left}
  <div class="card"><small>Produkcja dziś</small><b id="spv">0.0</b><span>kWh</span></div>
  <div class="card"><small>Zużycie dziś</small><b id="sld">0.0</b><span>kWh</span></div>
  <div class="card"><small>Pobór z sieci</small><b id="sgr">0.0</b><span>kWh</span></div>
+ <div class="card"><small>PV → Bateria</small><b id="spvbat">0.0</b><span>kWh</span></div>
  <div class="card"><small>Autarkia</small><b id="sau">0</b><span>%</span></div>
 </div>
 
@@ -922,7 +923,7 @@ function renderFullscreenChart(svg, d){
   area.ontouchend=()=>{tip.className='';cross.style.opacity='0';};
 }
 
-let tt=0,dSoc=55,dPvd=3.2,dLd=4.1,dGd=0.6;
+let tt=0,dSoc=55,dPvd=3.2,dLd=4.1,dGd=0.6,dPvBat=0.0;
 function fake(){
  tt+=0.35;
  const pv=Math.max(0,2900*Math.sin(tt/4));
@@ -933,9 +934,10 @@ function fake(){
  dSoc=Math.max(8,Math.min(100,dSoc+bp/2500));
  const grid=Math.max(0,load+bp-pv);
  dPvd+=pv*0.00056/1000*6; dLd+=load*0.00056/1000*6; dGd+=grid*0.00056/1000*6;
+ if(bp>0) dPvBat+=bp*0.00056/1000*6;
  return {ok:true,mode:2,pv:pv,pv1v:pv>5?330+20*Math.sin(tt):0,soc:dSoc,load:load,grid:grid,bp:bp,
   bv:25+dSoc*0.04,bc:bp/(25+dSoc*0.04),ac:231+Math.sin(tt),freq:50,out:230,temp:34+4*Math.sin(tt/3),
-  pvd:dPvd,ld:dLd,gd:dGd,rssi:-55,time:'demo',ip:'demo',ap:false,ver:'demo'};
+  pvd:dPvd,ld:dLd,gd:dGd,pv_bat:dPvBat,rssi:-55,time:'demo',ip:'demo',ap:false,ver:'demo'};
 }
 function fakeHist(){
  const range = $('hrange') ? $('hrange').value : '24h';
@@ -994,7 +996,7 @@ async function live(){
   const f=$('bfill');f.setAttribute('height',h);f.setAttribute('y',268-h);
   f.setAttribute('fill',d.soc<20?'#f87171':d.soc<50?'#fbbf24':'#4ade80');
   flow('lpv',d.pv); flow('lgr',d.grid); flow('lld',d.load); flow('lbat',d.bp);
-  T('spv',d.pvd.toFixed(1)); T('sld',d.ld.toFixed(1)); T('sgr',d.gd.toFixed(1)); T('sau',aut.toFixed(0));
+  T('spv',d.pvd.toFixed(1)); T('sld',d.ld.toFixed(1)); T('sgr',d.gd.toFixed(1)); T('spvbat',d.pv_bat.toFixed(1)); T('sau',aut.toFixed(0));
   T('dbv',d.bv.toFixed(1)); T('dbc',d.bc.toFixed(1)); T('dt',d.temp.toFixed(0));
   T('dac',d.ac.toFixed(0)); T('dfr',d.freq.toFixed(1)); T('dout',d.out.toFixed(0));
   T('foot',DEMO?'Tryb DEMO – dane symulowane':('IP '+d.ip+(d.ap?' · tryb AP':'')+' · '+d.time+' · WiFi '+d.rssi+' dBm · v'+d.ver));
@@ -1466,7 +1468,7 @@ void handleData() {
   char tbuf[8] = "--:--";
   time_t n = time(nullptr);
   if (n > 1700000000) { struct tm t; localtime_r(&n, &t); strftime(tbuf, sizeof(tbuf), "%H:%M", &t); }
-  String j; j.reserve(540);
+  String j; j.reserve(600);
   j  = "{\"pv\":"   + String(pv_power, 1);
   j += ",\"pv1v\":" + String(pv1_voltage, 1);
   j += ",\"soc\":"  + String(bat_soc, 1);
@@ -1483,6 +1485,7 @@ void handleData() {
   j += ",\"pvd\":"  + String(pv_wh / 1000.0, 2);
   j += ",\"ld\":"   + String(load_wh / 1000.0, 2);
   j += ",\"gd\":"   + String(grid_wh / 1000.0, 2);
+  j += ",\"pv_bat\":" + String(pv_bat_wh / 1000.0, 2);
   j += ",\"rssi\":" + String(WiFi.RSSI());
   j += ",\"ip\":\"" + currentIp() + "\"";
   j += String(",\"ap\":") + (apActive ? "true" : "false");
@@ -2048,6 +2051,7 @@ void loop() {
       pv_wh   += pv_power * h;
       load_wh += load_power * h;
       grid_wh += grid_power * h;
+      if (bat_power > 0) pv_bat_wh += bat_power * h;
       accPv += pv_power; accLd += load_power; accGr += grid_power; accN++;
       accS_pv += pv_power; accS_ld += load_power; accS_gr += grid_power; accS_n++;
     }
@@ -2068,9 +2072,9 @@ void loop() {
   // próbka co 5 min (wykresy 6 h i 24 h)
   if (now - lastHist >= 300000UL) {
     lastHist = now;
-    pushHist(accN ? (uint16_t)(accPv / accN) : 0,
-             accN ? (uint16_t)(accLd / accN) : 0,
-             accN ? (uint16_t)(accGr / accN) : 0);
+    pushHist(accN ? (uint16_t)(accPv / accN) : (uint16_t)pv_power,
+             accN ? (uint16_t)(accLd / accN) : (uint16_t)load_power,
+             accN ? (uint16_t)(accGr / accN) : (uint16_t)grid_power);
     acc_h_pv += accPv; acc_h_ld += accLd; acc_h_gr += accGr; acc_h_n += accN;
     accPv = accLd = accGr = 0; accN = 0;
   }
@@ -2084,7 +2088,7 @@ void loop() {
                      (uint16_t)(acc_h_ld / acc_h_n),
                      (uint16_t)(acc_h_gr / acc_h_n));
     } else {
-      pushHistHourly(0, 0, 0);
+      pushHistHourly((uint16_t)pv_power, (uint16_t)load_power, (uint16_t)grid_power);
     }
     acc_h_pv = acc_h_ld = acc_h_gr = 0; acc_h_n = 0;
   }
