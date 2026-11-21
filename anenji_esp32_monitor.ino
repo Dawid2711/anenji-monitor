@@ -633,9 +633,9 @@ table.ht td:first-child,table.ht th:first-child{text-align:left}
 </div>
 
 <h3>Historia produkcji – 24 h</h3>
-<div class="box" id="histbox">
- <svg id="hist" viewBox="0 0 560 190"></svg>
- <div id="tooltip"></div>
+<div class="box" id="histboxD">
+ <svg id="histD" viewBox="0 0 560 190"></svg>
+ <div id="tooltipD"></div>
 </div>
 <div style="font-size:11px;color:var(--mut);margin:6px 4px">
  <span style="color:#fbbf24">■</span> PV &nbsp;
@@ -657,9 +657,9 @@ table.ht td:first-child,table.ht th:first-child{text-align:left}
    <span class="tst" id="hrng"></span>
   </div>
  </div>
- <div class="box" id="histbox">
-  <svg id="hist" viewBox="0 0 560 190"></svg>
-  <div id="tooltip"></div>
+ <div class="box" id="histboxHis">
+  <svg id="histHis" viewBox="0 0 560 190"></svg>
+  <div id="tooltipHis"></div>
  </div>
  <div style="font-size:11px;color:var(--mut);margin:6px 4px">
   <span style="color:#fbbf24">■</span> PV &nbsp;
@@ -1002,17 +1002,46 @@ async function live(){
   T('foot',DEMO?'Tryb DEMO – dane symulowane':('IP '+d.ip+(d.ap?' · tryb AP':'')+' · '+d.time+' · WiFi '+d.rssi+' dBm · v'+d.ver));
   T('otav','Wersja firmware: '+d.ver);
   window._today=d.pvd;
+  // Wykres 24h na pulpicie
+  if(DEMO){
+   drawDashboardHist(fakeHist().pv, fakeHist().ld, fakeHist().gr||[]);
+  }else{
+   fetch('/history?range=24h').then(r=>r.json()).then(h=>drawDashboardHist(h.pv,h.ld,h.gr||[])).catch(()=>{});
+  }
  }catch(e){const b=$('badge');b.textContent='BRAK POŁĄCZENIA';b.className='badge off';}
 }
 
-/* ===== WYKRES 24h z tooltipem ===== */
+/* ===== WYKRES 24h na Pulpicie (statyczny, wszystkie 3 serie) ===== */
+function drawDashboardHist(pv,ld,gr){
+ const n=pv.length, s=$('histD');
+ if(!s || n<2) return;
+ const W=560,H=190,L=36,R=8,Tp=8,B=20;
+ let mx=100;
+ for(const a of [pv,ld,gr]) for(let i=0;i<a.length;i++) if(a[i]>mx) mx=a[i];
+ const u=mx>2000?1000:500; mx=Math.ceil(mx/u)*u;
+ const X=i=>L+i*(W-L-R)/(n-1), Y=v=>Tp+(H-Tp-B)*(1-v/mx);
+ let g='';
+ for(let k=0;k<=4;k++){const v=mx*k/4,y=Y(v);
+  g+=`<line x1="${L}" x2="${W-R}" y1="${y}" y2="${y}" stroke="#223449"/><text x="${L-4}" y="${y+3}" text-anchor="end" font-size="9" fill="#8aa0b8">${(v/1000).toFixed(1)}</text>`;}
+ const pts=a=>a.map((v,i)=>X(i).toFixed(1)+','+Y(v).toFixed(1)).join(' ');
+ const now=Date.now();
+ for(let k=0;k<=4;k++){const i=Math.round(k*(n-1)/4),t=new Date(now-(n-1-i)*300000);
+  g+=`<text x="${X(i)}" y="${H-5}" text-anchor="middle" font-size="9" fill="#8aa0b8">${String(t.getHours()).padStart(2,'0')}:${String(t.getMinutes()).padStart(2,'0')}</text>`;}
+ g+=`<polygon points="${X(0)},${Y(0)} ${pts(pv)} ${X(n-1)},${Y(0)}" fill="#fbbf2430"/>`;
+ g+=`<polyline points="${pts(pv)}" fill="none" stroke="#fbbf24" stroke-width="2"/>`;
+ g+=`<polyline points="${pts(ld)}" fill="none" stroke="#38bdf8" stroke-width="1.5"/>`;
+ g+=`<polyline points="${pts(gr)}" fill="none" stroke="#ec4899" stroke-width="1.5"/>`;
+ s.innerHTML=g;
+}
+
+/* ===== WYKRES 24h z tooltipem (zakładka Historia) ===== */
 let histData = {pv:[],ld:[],gr:[],step:300,range:'24h'};
 let crosshairLine = null;
 
 function lineChart(pv,ld,gr,step,range,mode){
  histData = {pv,ld,gr,step,range,mode};
  if(!mode) mode = 'all';
- const W=560,H=190,L=36,R=8,Tp=8,B=20,n=pv.length,s=$('hist');
+ const W=560,H=190,L=36,R=8,Tp=8,B=20,n=pv.length,s=$('histHis');
  if(!s) return;
  if(n<2){s.innerHTML='<text x="20" y="50" fill="#8aa0b8" font-size="12">Zbieranie danych…</text>';return;}
 
@@ -1061,10 +1090,9 @@ function lineChart(pv,ld,gr,step,range,mode){
  // overlay
  g += `<rect id="hoverarea" x="${L}" y="${Tp}" width="${W-L-R}" height="${H-Tp-B}" fill="transparent"/>`;
  s.innerHTML = g;
- s.onclick = () => openFullscreen('hist');
 
  const area = document.getElementById('hoverarea');
- const tip = $('tooltip');
+ const tip = $('tooltipHis');
  const cross = document.getElementById('crosshair');
  area.onmousemove = function(e){
   const rect = s.getBoundingClientRect();
@@ -1085,7 +1113,7 @@ function lineChart(pv,ld,gr,step,range,mode){
   if(showGr) tooltipHtml += `<span style="color:#ec4899">Sieć: ${gr[idx]} W</span><br>`;
   tip.innerHTML = tooltipHtml;
   tip.className = 'show';
-  const box = $('histbox').getBoundingClientRect();
+  const box = $('histboxHis').getBoundingClientRect();
   let left = e.clientX - box.left + 12;
   let top = e.clientY - box.top - 10;
   if(left + 140 > box.width) left = e.clientX - box.left - 150;
