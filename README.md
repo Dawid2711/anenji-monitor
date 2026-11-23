@@ -1,7 +1,213 @@
 # Anenji Solar Monitor — ESP32 + RS485 (Modbus)
 
+**Language / Język:** [🇬🇧 English](#-english) | [🇵🇱 Polski](#-polski)
+
+---
+
+# 🇬🇧 English
+
+## Overview
+
+PV production, energy consumption, and battery monitoring for **Anenji ANJ-4000W-24V-WIFI** inverter (and compatibles).  
+Communicates via **RS485 (Modbus RTU)**, serves a **web UI**, and supports **GitHub OTA firmware updates**.
+
+---
+
+## 🎯 Features
+
+| Feature | Description |
+|---------|-------------|
+| **Live view (WebSocket)** | Inverter read every 1 s, pushed to browser via WebSocket (port 81) — instant updates without refresh |
+| **Energy flow diagram** | Animated SVG: PV → battery / grid / house, colored dash-dot arrows (visible in light/dark mode) |
+| **24 h history** | 5-min resolution chart (PV / load / grid) — always visible on Dashboard |
+| **Extended history** | Ranges: 15 min, 1 h, 6 h, 24 h, 7 d, 30 d, 90 d, 1 yr + modes: all / PV only / load only / grid only |
+| **7/30 day & monthly production** | Bar charts with autarky % |
+| **CSV Export** | Download full daily history as CSV |
+| **PV → Battery counter** | `pv_bat_wh` — energy from panels used to charge battery (kWh) |
+| **GitHub OTA** | Version check: on boot (~90 s) + daily at 12:00 + manual "Flash from GitHub" (HTTPS, streaming, 2 KB buffer, 20 s timeout) |
+| **Auto-rollback OTA** | New version runs "on trial" — auto-confirms after 60 s with WiFi or 10 min offline; on failure bootloader rolls back |
+| **AP / STA mode** | No WiFi for 5 min → starts AP `ANENJI-SETUP` / `anenji1234` → `192.168.4.1`; disables AP after 1 min stable connection |
+| **NTP + daily rollover** | Daily sums stored at midnight (up to 1000 days in LittleFS) |
+| **Dark / Light theme** | Toggle in header, persisted in localStorage |
+| **Inverter ID scanner** | Auto-search Modbus ID (1, 38, 2–10) |
+| **Register scanner** | Block read of Holding/Input registers from any address |
+| **Configurable registers** | Per signal: enable, address, type (Holding/Input), scale, sign |
+| **Battery current offset** | `bcOffset` for register 232 |
+| **DEMO mode** | Simulated sinusoidal data (day/night, clouds, load) — UI testing without inverter |
+
+---
+
+## 🛠 Hardware
+
+| Component | Details |
+|-----------|---------|
+| **MCU** | ESP32 (e.g., ESP32-DOIT DevKit V1) |
+| **RS485** | MAX485 / SP3485 on UART2 (GPIO16=RX, GPIO17=TX, GPIO4=DE/RE) |
+| **Power** | 5 V from inverter (via step-down) or USB |
+| **Storage** | LittleFS (4 MB partition with OTA) |
+| **Inverter** | Anenji ANJ-4000W-24V-WIFI (Modbus ID=1, 9600 8N1, Holding registers) |
+
+**Wiring diagram:**
+```
+Inverter (A/B) ──► MAX485 (A/B)
+MAX485 RO ──► ESP32 GPIO16 (RX2)
+MAX485 DI ◄── ESP32 GPIO17 (TX2)
+MAX485 DE/RE ──► ESP32 GPIO4
+MAX485 VCC ──► 3.3 V ESP32
+MAX485 GND ──► GND ESP32
+```
+
+---
+
+## 💻 Software Stack
+
+| Layer | Technology |
+|-------|------------|
+| **Firmware** | Arduino Core ESP32 (C++) |
+| **Modbus** | `ModbusMaster` (Holding/Input Registers) |
+| **Web Server** | `WebServer` (ESP32, port 80) + `ESPmDNS` (`anenji.local`) |
+| **WebSocket** | `WebSocketsServer` (port 81, heartbeat 15 s) — live push to browser |
+| **Filesystem** | `LittleFS` (state.bin, hist.bin, histh2.bin, days.bin) |
+| **HTTPS OTA** | `WiFiClientSecure` + `HTTPClient` (streaming, 2 KB buffer, 20 s timeout) |
+| **Auto-rollback** | `esp_ota_mark_app_valid_cancel_rollback()` after 60 s (WiFi) / 10 min (offline) |
+| **Time** | `configTzTime` (NTP: pool.ntp.org, time.google.com, CET/CEST) |
+| **Frontend** | Vanilla JS + inline SVG (no external deps, HTML gzipped in PROGMEM) |
+| **Charts** | SVG `<polyline>` + `<polygon>` (PV fill), tooltip / crosshair, fullscreen |
+| **Themes** | CSS Custom Properties (`--card`, `--bg`, `--fg`…) + `data-theme` |
+| **Config** | `Preferences` (NVS) — WiFi, Modbus, registers, GitHub OTA, OTA password |
+| **AP Watchdog** | No WiFi 5 min → AP ON; stable WiFi 1 min → AP OFF |
+
+---
+
+## 📊 UI Description
+
+### Dashboard
+- **4 tiles**: PV (kW), Battery (%), Load (W), Grid (W)
+- **Animated energy flow** (SVG):
+  - ☀ PV → ⚡ battery / 🏠 house / ⚡ grid
+  - Dash-dot arrows (visible in light/dark), colors: PV=yellow, grid=pink, house=blue, battery=green
+  - Battery SOC bar
+  - Autarky % and PV/Load %
+- **Daily stats**: Production, Consumption, Grid import, **PV → Battery (kWh)**, Autarky
+- **Inverter details**: Battery V/A, Temp, Grid AC V/Hz, Output V
+- **24 h history** (SVG, 3 series, dash-dot grid, Y axis in kW)
+- **7 day production** (bars, today = yellow)
+
+### History (tab)
+- **Range selector**: 15 min → 1 yr
+- **Mode selector**: All / PV only / Load only / Grid only
+- **Chart with tooltip & crosshair** (click = fullscreen, touch = values)
+- **7 day / 30 day / Monthly / Days table** + CSV button + Clear history
+
+### Settings
+- **WiFi**: scan, SSID, password, save + restart
+- **Modbus**: ID, baud, address offset, battery current direction, current offset
+- **Register scanner**: from address, count, results table
+- **Signal registers**: per signal — enabled, address, type (Holding/Input), scale, sign
+- **GitHub OTA**: user, repo, enable check, buttons: Check / Flash
+- **File OTA**: pick `.ino.bin`, OTA password, progress bar
+- **Change OTA password**
+
+---
+
+## 🚀 Installation & First Setup
+
+1. **Flash firmware** (ESP32 Dev Module, Partition Scheme: *Default 4MB with spiffs*):
+   - Arduino IDE → *Sketch → Export compiled Binary* → `firmware.bin`
+   - or `esptool.py write_flash 0x10000 firmware.bin`
+2. **Power on** → ESP32 starts AP `ANENJI-SETUP` / `anenji1234`
+3. **Connect** to AP → open `http://192.168.4.1`
+4. **Settings → WiFi** → pick 2.4 GHz network, enter password → *Save WiFi & restart*
+5. After reboot ESP connects to router → IP visible in serial / on screen (if present)
+6. **Settings → Modbus** → verify ID (default 1), baud 9600, optionally *Find ID*
+7. **Settings → GitHub OTA** → enter `user/repo` (e.g., `Dawid2711/anenji-monitor`), enable *check daily at 12:00*
+8. Done! Panel at `http://anenji.local` (mDNS) or ESP IP.
+
+---
+
+## 🔧 GitHub OTA Configuration
+
+On GitHub (branch `main`) two files are required:
+- `version.txt` — single line: `2026.11.24.7`
+- `firmware.bin` — compiled `.ino.bin` (Arduino: *Sketch → Export compiled Binary*)
+
+**Order:** upload `firmware.bin` first, then `version.txt`.  
+ESP checks `version.txt` daily at 12:00; if newer → *Flash from GitHub* appears in UI.  
+Manual: *Settings → Check update* → *Flash from GitHub* (requires OTA password).
+
+---
+
+## 📂 LittleFS File Structure
+
+| File | Content |
+|------|---------|
+| `/state.bin` | Daily state: `pv_wh, load_wh, grid_wh, pv_bat_wh, daysKwh[7], curDay, curDate` |
+| `/hist.bin` | 5-min × 288 (24 h): `pv[], ld[], gr[]` + epoch |
+| `/histh2.bin` | 1-h × 720 (30 d): `pv[], ld[], gr[]` + epoch |
+| `/days.bin` | Daily sums (DayRec): `date, pv, load, grid` (up to 1000 records) |
+
+### Three History Buffers (RAM → LittleFS)
+- **30 s × 120 = 1 h** (`hist_s_*`) — RAM only, for 15 min / 1 h charts
+- **5 min × 288 = 24 h** (`hist_*`) — saved to `/hist.bin` every 30 min
+- **1 h × 720 = 30 d** (`hist_h_*`) — saved to `/histh2.bin` every 30 min
+- **Gap filling**: on restart fills zeros for downtime (based on epoch in files)
+
+---
+
+## 🧪 DEMO Mode
+
+Toolbar button **LIVE/DEMO**. DEMO generates sinusoidal data (day/night, clouds, load) — for UI testing without inverter.
+
+---
+
+## 🔐 Security
+
+- OTA password (default `anenji`) — change in *Settings → OTA → Change OTA password*
+- WiFi password not visible in UI (only during entry)
+- GitHub OTA over HTTPS only (`WiFiClientSecure::setInsecure()` — certs not verified but channel encrypted)
+
+---
+
+## 📝 Changelog
+
+| Version | Date | Key Changes |
+|---------|------|-------------|
+| **2026.11.24.7** | 2026-11-23 | Light theme: visible dash-dot grid, improved contrast; firmware.bin from new build path |
+| **2026.11.24.5** | 2026-11-21 | Y-axis grid and series lines as dash-dot (5 5 / 5 3) |
+| **2026.11.24.4** | 2026-11-21 | Separated Dashboard vs History charts (unique IDs), no conflicts |
+| **2026.11.24.3** | 2026-11-21 | `pv_bat_wh` (PV→Battery kWh), history fallback when Modbus unavailable |
+| **2026.11.24.1** | 2026-11-21 | Fullscreen charts with tooltip, theme fixes, robust OTA |
+| **2026.11.20** | 2026-11-19 | First version with GitHub OTA, LittleFS history, SVG dashboard |
+
+---
+
+## 📄 License
+
+MIT — use, modify, share.  
+If you fix something useful — PR welcome! 🙌
+
+---
+
+## 🙏 Acknowledgments
+
+- **ModbusMaster** — 4-20ma / Doc Walker
+- **Arduino ESP32 Core** — Espressif + community
+- All testers on live installs (parents, neighbors, me 😉)
+
+---
+
+> **Author:** Dawid (GitHub: [@Dawid2711](https://github.com/Dawid2711))  
+> **Repo:** `github.com/Dawid2711/anenji-monitor`  
+> **Version:** `2026.11.24.7` (format `YYYY.MM.DD.N` — N-th patch of that day)
+
+---
+
+# 🇵🇱 Polski
+
+## Przegląd
+
 Monitor produkcji PV, zużycia energii i pracy baterii dla falownika **Anenji ANJ-4000W-24V-WIFI** (i kompatybilnych).  
-Urządzenie komunikuje się z falownikiem przez **RS485 (Modbus RTU)**, prezentuje dane na **własnym web-serwerze** i potrafi **aktualizować firmware z GitHuba (OTA)**.
+Komunikacja przez **RS485 (Modbus RTU)**, własny **web-serwer** i **aktualizacje OTA z GitHuba**.
 
 ---
 
