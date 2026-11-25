@@ -64,7 +64,7 @@ MAX485 GND ──► GND ESP32
 | Layer | Technology |
 |-------|------------|
 | **Firmware** | Arduino Core ESP32 (C++) |
-| **Modbus** | `ModbusMaster` (Holding/Input Registers) |
+| **Modbus** | Built-in `MiniModbus` (Modbus RTU 0x03/0x04, short timeout, block read) — no external library since 2026.11.25.1 |
 | **Web Server** | `WebServer` (ESP32, port 80) + `ESPmDNS` (`anenji.local`) |
 | **WebSocket** | `WebSocketsServer` (port 81, heartbeat 15 s) — live push to browser |
 | **Filesystem** | `LittleFS` (state.bin, hist.bin, histh2.bin, days.bin) |
@@ -190,7 +190,7 @@ If you fix something useful — PR welcome! 🙌
 
 ## 🙏 Acknowledgments
 
-- **ModbusMaster** — 4-20ma / Doc Walker
+- **ModbusMaster** — 4-20ma / Doc Walker (used until 2026.11.24.7, API kept compatible)
 - **Arduino ESP32 Core** — Espressif + community
 - All testers on live installs (parents, neighbors, me 😉)
 
@@ -262,7 +262,7 @@ MAX485 GND ──► GND ESP32
 | Warstwa | Technologia |
 |---------|-------------|
 | **Firmware** | Arduino Core ESP32 (C++) |
-| **Modbus** | `ModbusMaster` (Holding/Input Registers) |
+| **Modbus** | Wbudowany `MiniModbus` (Modbus RTU 0x03/0x04, krótki timeout, odczyt blokiem) — bez zewnętrznej biblioteki od 2026.11.25.1 |
 | **Web Server** | `WebServer` (ESP32, port 80) + `ESPmDNS` (`anenji.local`) |
 | **WebSocket** | `WebSocketsServer` (port 81, heartbeat 15 s) — live push do przeglądarki |
 | **System plików** | `LittleFS` (state.bin, hist.bin, histh2.bin, days.bin) |
@@ -388,7 +388,7 @@ Jeśli poprawisz coś sensownego — PR mile widziany! 🙌
 
 ## 🙏 Podziękowania
 
-- **ModbusMaster** — 4-20ma / Doc Walker
+- **ModbusMaster** — 4-20ma / Doc Walker (używany do wersji 2026.11.24.7, API zachowane)
 - **Arduino ESP32 Core** — Espressif + społeczność
 - Wszystkim testerom na żywych instalacjach (rodzice, sąsiedzi, ja 😉)
 
